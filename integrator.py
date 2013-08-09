@@ -360,6 +360,14 @@ class IntegrationResults:
             for key in res:
                 self.values[key].append(res[key])
 
+        # Stack the results into a numpy array, if the format allows
+        for key in self.values:
+            if isinstance(self.values[key][0], float):
+                self.values[key] = numpy.array(self.values[key])
+            elif isinstance(self.values[key][0], numpy.ndarray):
+                self.values[key] = numpy.vstack(
+                    [arr.reshape(1, *arr.shape) for arr in self.values[key]])
+
     def _fill_errors(self, psi_double, psi, results_double, results):
         # calculate the error (separately for each ensemble and component)
         psi_errors = self._batched_norm(psi_double - psi) / self._batched_norm(psi)

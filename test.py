@@ -24,8 +24,8 @@ def nonlinear_no_potential(dtype, interaction, tunneling):
         """
         %for comp in range(components):
         INLINE WITHIN_KERNEL ${c_ctype} ${prefix}${comp}(
-            %for other_comp in range(components):
-            ${c_ctype} psi${other_comp},
+            %for pcomp in range(components):
+            ${c_ctype} psi${pcomp},
             %endfor
             ${s_ctype} t)
         {

@@ -27,15 +27,22 @@ def get_ksquared(shape, box):
     return sum([full_k ** 2 for full_k in full_ks])
 
 
-def get_nonlinear_wrapper(c_dtype, nonlinear_module, dt):
+def get_nonlinear_wrapper(components, c_dtype, nonlinear_module, dt):
     s_dtype = dtypes.real_for(c_dtype)
     return Module.create(
         """
-        %for comp in (0, 1):
+        %for comp in range(components):
         INLINE WITHIN_KERNEL ${c_ctype} ${prefix}${comp}(
-            ${c_ctype} psi0, ${c_ctype} psi1, ${s_ctype} t)
+            %for pcomp in range(components):
+            ${c_ctype} psi${pcomp},
+            %endfor
+            ${s_ctype} t)
         {
-            ${c_ctype} nonlinear = ${nonlinear}${comp}(psi0, psi1, t);
+            ${c_ctype} nonlinear = ${nonlinear}${comp}(
+                %for pcomp in range(components):
+                psi${pcomp},
+                %endfor
+                t);
             return ${mul}(
                 COMPLEX_CTR(${c_ctype})(0, -${dt}),
                 nonlinear);
@@ -43,6 +50,7 @@ def get_nonlinear_wrapper(c_dtype, nonlinear_module, dt):
         %endfor
         """,
         render_kwds=dict(
+            components=components,
             c_ctype=dtypes.ctype(c_dtype),
             s_ctype=dtypes.ctype(s_dtype),
             mul=functions.mul(c_dtype, c_dtype),
@@ -58,17 +66,20 @@ def get_nonlinear1(state_arr, scalar_dtype, nonlinear_module):
             Parameter('input', Annotation(state_arr, 'i')),
             Parameter('t', Annotation(scalar_dtype))],
         """
-        <%
-            all_indices = ', '.join(idxs)
-        %>
-        ${output.ctype} psi0 = ${input.load_idx}(0, ${all_indices});
-        ${output.ctype} psi1 = ${input.load_idx}(1, ${all_indices});
+        %for comp in range(components):
+        ${output.ctype} psi${comp} = ${input.load_idx}(${comp}, ${idxs.all()});
+        %endfor
 
-        ${output.store_idx}(0, ${all_indices}, ${nonlinear}0(psi0, psi1, ${t}));
-        ${output.store_idx}(1, ${all_indices}, ${nonlinear}1(psi0, psi1, ${t}));
+        %for comp in range(components):
+        ${output.store_idx}(${comp}, ${idxs.all()}, ${nonlinear}${comp}(
+            %for pcomp in range(components):
+            psi${pcomp},
+            %endfor
+            ${t}));
+        %endfor
         """,
         guiding_array=state_arr.shape[1:],
-        render_kwds=dict(nonlinear=nonlinear_module))
+        render_kwds=dict(components=state_arr.shape[0], nonlinear=nonlinear_module))
 
 
 def get_nonlinear2(state_arr, scalar_dtype, nonlinear_module, dt):
@@ -84,45 +95,37 @@ def get_nonlinear2(state_arr, scalar_dtype, nonlinear_module, dt):
             Parameter('k1', Annotation(state_arr, 'i')),
             Parameter('t', Annotation(scalar_dtype))],
         """
-        <%
-            all_indices = ', '.join(idxs)
-        %>
+        %for comp in range(components):
+        ${psi_k.ctype} psi_I_${comp} = ${psi_I.load_idx}(${comp}, ${idxs.all()});
+        ${psi_k.ctype} k1_${comp} = ${k1.load_idx}(${comp}, ${idxs.all()});
+        %endfor
 
-        ${psi_k.ctype} psi_I_0 = ${psi_I.load_idx}(0, ${all_indices});
-        ${psi_k.ctype} psi_I_1 = ${psi_I.load_idx}(1, ${all_indices});
-        ${psi_k.ctype} k1_0 = ${k1.load_idx}(0, ${all_indices});
-        ${psi_k.ctype} k1_1 = ${k1.load_idx}(1, ${all_indices});
-
-        ${psi_k.ctype} k2_0 = ${nonlinear}0(
-            psi_I_0 + ${div}(k1_0, 2),
-            psi_I_1 + ${div}(k1_1, 2),
+        %for comp in range(components):
+        ${psi_k.ctype} k2_${comp} = ${nonlinear}${comp}(
+            %for pcomp in range(components):
+            psi_I_${pcomp} + ${div}(k1_${pcomp}, 2),
+            %endfor
             ${t} + ${dt} / 2);
-        ${psi_k.ctype} k2_1 = ${nonlinear}1(
-            psi_I_0 + ${div}(k1_0, 2),
-            psi_I_1 + ${div}(k1_1, 2),
-            ${t} + ${dt} / 2);
+        %endfor
 
-        ${psi_k.ctype} k3_0 = ${nonlinear}0(
-            psi_I_0 + ${div}(k2_0, 2),
-            psi_I_1 + ${div}(k2_1, 2),
+        %for comp in range(components):
+        ${psi_k.ctype} k3_${comp} = ${nonlinear}${comp}(
+            %for pcomp in range(components):
+            psi_I_${pcomp} + ${div}(k2_${pcomp}, 2),
+            %endfor
             ${t} + ${dt} / 2);
-        ${psi_k.ctype} k3_1 = ${nonlinear}1(
-            psi_I_0 + ${div}(k2_0, 2),
-            psi_I_1 + ${div}(k2_1, 2),
-            ${t} + ${dt} / 2);
+        %endfor
 
-        ${psi_4.store_idx}(0, ${all_indices}, psi_I_0 + k3_0);
-        ${psi_4.store_idx}(1, ${all_indices}, psi_I_1 + k3_1);
-
+        %for comp in range(components):
+        ${psi_4.store_idx}(${comp}, ${idxs.all()}, psi_I_${comp} + k3_${comp});
         ${psi_k.store_idx}(
-            0, ${all_indices},
-            psi_I_0 + ${div}(k1_0, 6) + ${div}(k2_0, 3) + ${div}(k3_0, 3));
-        ${psi_k.store_idx}(
-            1, ${all_indices},
-            psi_I_1 + ${div}(k1_1, 6) + ${div}(k2_1, 3) + ${div}(k3_1, 3));
+            ${comp}, ${idxs.all()},
+            psi_I_${comp} + ${div}(k1_${comp}, 6) + ${div}(k2_${comp}, 3) + ${div}(k3_${comp}, 3));
+        %endfor
         """,
         guiding_array=state_arr.shape[1:],
         render_kwds=dict(
+            components=state_arr.shape[0],
             nonlinear=nonlinear_module,
             dt=dtypes.c_constant(dt, scalar_dtype),
             div=functions.div(state_arr.dtype, numpy.int32, out_dtype=state_arr.dtype)))
@@ -138,23 +141,23 @@ def get_nonlinear3(state_arr, scalar_dtype, nonlinear_module, dt):
             Parameter('kprop_psi_4', Annotation(state_arr, 'i')),
             Parameter('t', Annotation(scalar_dtype))],
         """
-        <%
-            all_indices = ', '.join(idxs)
-        %>
+        %for comp in range(components):
+        ${output.ctype} psi4_${comp} = ${kprop_psi_4.load_idx}(${comp}, ${idxs.all()});
+        ${output.ctype} psik_${comp} = ${kprop_psi_k.load_idx}(${comp}, ${idxs.all()});
+        %endfor
 
-        ${output.ctype} psi4_0 = ${kprop_psi_4.load_idx}(0, ${all_indices});
-        ${output.ctype} psi4_1 = ${kprop_psi_4.load_idx}(1, ${all_indices});
-        ${output.ctype} psik_0 = ${kprop_psi_k.load_idx}(0, ${all_indices});
-        ${output.ctype} psik_1 = ${kprop_psi_k.load_idx}(1, ${all_indices});
-
-        ${output.ctype} k4_0 = ${nonlinear}0(psi4_0, psi4_1, ${t} + ${dt});
-        ${output.ctype} k4_1 = ${nonlinear}1(psi4_0, psi4_1, ${t} + ${dt});
-
-        ${output.store_idx}(0, ${all_indices}, psik_0 + ${div}(k4_0, 6));
-        ${output.store_idx}(1, ${all_indices}, psik_1 + ${div}(k4_1, 6));
+        %for comp in range(components):
+        ${output.ctype} k4_${comp} = ${nonlinear}${comp}(
+            %for pcomp in range(components):
+            psi4_${pcomp},
+            %endfor
+            ${t} + ${dt});
+        ${output.store_idx}(${comp}, ${idxs.all()}, psik_${comp} + ${div}(k4_${comp}, 6));
+        %endfor
         """,
         guiding_array=state_arr.shape[1:],
         render_kwds=dict(
+            components=state_arr.shape[0],
             nonlinear=nonlinear_module,
             dt=dtypes.c_constant(dt, scalar_dtype),
             div=functions.div(state_arr.dtype, numpy.int32, out_dtype=state_arr.dtype)))
@@ -201,7 +204,8 @@ class RK4IPStepper(Computation):
             output_prime=self._kprop_trf.output,
             kprop=self._kprop_trf.kprop)
 
-        nonlinear_wrapper = get_nonlinear_wrapper(state_arr.dtype, nonlinear_module, dt)
+        nonlinear_wrapper = get_nonlinear_wrapper(
+            state_arr.shape[0], state_arr.dtype, nonlinear_module, dt)
         self._N1 = get_nonlinear1(state_arr, scalar_dtype, nonlinear_wrapper)
         self._N2 = get_nonlinear2(state_arr, scalar_dtype, nonlinear_wrapper, dt)
         self._N3 = get_nonlinear3(state_arr, scalar_dtype, nonlinear_wrapper, dt)

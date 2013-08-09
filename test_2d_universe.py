@@ -144,6 +144,12 @@ def test_2d_universe():
     assert results.errors['psi_strong_mean'] < 1e-7
     assert results.errors['psi_strong_max'] < 1e-7
 
+    # Check that the population stayed constant
+    N_total = results.values['Nplus_mean'] + results.values['Nminus_mean']
+    # Not using N, since the initial value can differ slightly (due to initial sampling)
+    N_diff = N_total - N_total[0]
+    assert numpy.abs(N_diff).max() < 1e-6
+
     plot_2d_universe(results.values['density'][-1], L_trap, N)
 
 

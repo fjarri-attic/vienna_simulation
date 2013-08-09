@@ -4,11 +4,14 @@ import numpy
 import sys
 import time
 
+from reikna.helpers import product
 from reikna.cluda import dtypes, Module, Snippet, functions
 from reikna.core import Computation, Parameter, Annotation, Transformation, Type
 
 from reikna.fft import FFT
 from reikna.pureparallel import PureParallel
+
+_range = xrange if sys.version_info[0] < 3 else range
 
 
 def get_ksquared(shape, box):
@@ -245,10 +248,9 @@ class RK4IPStepper(Computation):
 
 class Integrator:
 
-    def __init__(self, thr, shape, dtype, box, tmax, steps, samples,
+    def __init__(self, thr, psi_arr_t, box, tmax, steps, samples,
             kinetic_coeff=1, nonlinear_module=None):
 
-        state_arr = Type(dtype, shape)
         self.tmax = tmax
         self.steps = steps
         self.samples = samples
@@ -256,22 +258,27 @@ class Integrator:
         self.dt_half = self.dt / 2
 
         self.thr = thr
-        self.stepper = RK4IPStepper(state_arr, self.dt,
+        self.stepper = RK4IPStepper(psi_arr_t, self.dt,
             box=box, kinetic_coeff=kinetic_coeff, nonlinear_module=nonlinear_module).compile(thr)
-        self.stepper_half = RK4IPStepper(state_arr, self.dt_half,
+        self.stepper_half = RK4IPStepper(psi_arr_t, self.dt_half,
             box=box, kinetic_coeff=kinetic_coeff, nonlinear_module=nonlinear_module).compile(thr)
 
-    def _integrate(self, psi, half_step, collector):
+    def _collect(self, psi, t, collectors):
+        t_start = time.time()
+
+        res_dict = {'time': t}
+        for collector in collectors:
+            res_dict.update(collector(psi))
+
+        t_collectors = time.time() - t_start
+        return res_dict, t_collectors
+
+    def _integrate(self, psi, half_step, collectors):
         results = []
 
         t_collectors = 0
 
         t_start = time.time()
-
-        if half_step:
-            t_collector = time.time()
-            results.append(collector(psi))
-            t_collectors += time.time() - t_collector
 
         stepper = self.stepper_half if half_step else self.stepper
         dt = self.dt_half if half_step else self.dt
@@ -284,7 +291,12 @@ class Integrator:
         else:
             print("Skipping callbacks at t =", end=' ')
 
-        for step in xrange(self.steps * (2 if half_step else 1)):
+        if half_step:
+            res_dict, t_col = self._collect(psi, t, collectors)
+            results.append(res_dict)
+            t_collectors += t_col
+
+        for step in _range(self.steps * (2 if half_step else 1)):
             stepper(psi, psi, t)
             t += dt
 
@@ -292,9 +304,11 @@ class Integrator:
                 if half_step:
                     print(t, end=' ')
                     sys.stdout.flush()
-                    t_collector = time.time()
-                    results.append(collector(psi))
-                    t_collectors += time.time() - t_collector
+
+                    res_dict, t_col = self._collect(psi, t, collectors)
+                    results.append(res_dict)
+                    t_collectors += t_col
+
                 else:
                     print(t, end=' ')
                     sys.stdout.flush()
@@ -310,28 +324,55 @@ class Integrator:
         if half_step:
             return results
         else:
-            return [collector(psi)]
+            res_dict, _ = self._collect(psi, t, collectors)
+            return [res_dict]
 
-    def __call__(self, psi, collector):
+    def __call__(self, psi, collectors):
 
         # double step (to estimate the convergence)
         psi_double = self.thr.copy_array(psi)
-        results_double = self._integrate(psi_double, False, collector)
+        results_double = self._integrate(psi_double, False, collectors)
 
         # actual integration
-        results = self._integrate(psi, True, collector)
+        results = self._integrate(psi, True, collectors)
 
-        # calculate the error (separately for each ensemble)
-        batched_norm = lambda a: numpy.sqrt((numpy.abs(a) ** 2).sum(-1))
-        psi_errors = batched_norm(psi_double.get() - psi.get()) / batched_norm(psi.get())
-        print("Psi: mean err =", psi_errors.mean(), "max err =", psi_errors.max())
+        return IntegrationResults(psi_double.get(), psi.get(), results_double, results)
+
+
+class IntegrationResults:
+
+    def __init__(self, psi_double, psi, results_double, results):
+        self._fill_errors(psi_double, psi, results_double, results)
+        self._fill_results(results)
+
+    def _fill_results(self, results):
+
+        # Currently we have the results in form [{results for time t1}, {results for time t2}, ...]
+        # We want to transpose them to look like
+        # {result_group1: [result for time t1, result for time t2, ...], ...}
+
+        self.values = {key:[] for key in results[0].keys()}
+        for res in results:
+            for key in res:
+                self.values[key].append(res[key])
+
+    def _fill_errors(self, psi_double, psi, results_double, results):
+        # calculate the error (separately for each ensemble and component)
+        psi_errors = self._batched_norm(psi_double - psi) / self._batched_norm(psi)
+
+        self.errors = dict(psi_strong_mean=psi_errors.mean(), psi_strong_max=psi_errors.max())
 
         # calculate result errors
-        errors = dict(psi_strong_mean=psi_errors.mean(), psi_strong_max=psi_errors.max())
-        for key in results[-1]:
-            res_double = results_double[-1][key]
-            res = results[-1][key]
-            errors[key] = numpy.linalg.norm(res_double - res) / numpy.linalg.norm(res)
-            print("Error in", key, "=", errors[key])
+        final_results_double = results_double[-1]
+        final_results = results[-1]
+        for key in final_results:
+            res_double = final_results_double[key]
+            res = final_results[key]
+            self.errors[key] = numpy.linalg.norm(res_double - res) / numpy.linalg.norm(res)
 
-        return results, errors
+    def _batched_norm(self, x):
+        norms = numpy.abs(x) ** 2
+
+        # Sum over spatial dimensions
+        norms = norms.reshape(x.shape[0], x.shape[1], product(x.shape[2:]))
+        return numpy.sqrt(norms.sum(-1))

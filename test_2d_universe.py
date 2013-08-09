@@ -35,7 +35,7 @@ def nonlinear_no_potential(dtype, interaction, tunneling):
             %for pcomp in range(components):
             ${c_ctype} psi${pcomp},
             %endfor
-            ${s_ctype} t)
+            ${s_ctype} V, ${s_ctype} t)
         {
             return (
                 ${mul}(psi${comp}, (

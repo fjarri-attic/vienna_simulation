@@ -10,7 +10,15 @@ from integrator import Integrator
 
 
 def nonlinear_no_potential(dtype, interaction, tunneling):
-    """
+    r"""
+    Nonlinear module
+
+    .. math::
+
+        N(\psi_1, ... \psi_C)
+        = \sum_{n=1}^{C} U_{jn} |\psi_n|^2 \psi_j
+          - \nu_j psi_{m_j}
+
     ``interaction``: a symmetrical ``components x components`` array with interaction strengths.
     ``tunneling``: a list of (other_comp, coeff) pairs of tunnelling strengths.
     """
@@ -82,13 +90,7 @@ class CollectorWigner2D:
 
 
 def test_2d_universe():
-    """
-    Runs the simulation for
 
-        i dpsi_j/dt = -nabla^2 psi_j / 2 + gamma |psi_j|^2 psi_j - nu psi_{1-j}
-
-    With the initial state psi = 1 / sqrt(gamma)
-    """
     modes = 128
     L_trap = 80.
     gamma = 0.1

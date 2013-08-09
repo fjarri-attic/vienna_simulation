@@ -254,6 +254,24 @@ class Integrator:
 
     def __init__(self, thr, psi_arr_t, box, tmax, steps, samples,
             kinetic_coeff=1, nonlinear_module=None):
+        r"""
+        Integrates the equation
+
+        .. math::
+
+            i \frac{\psi_j}{dt} = - k \nabla^2 psi_j + N(\psi_1, ... \psi_C, V(t), t),
+
+        where :math:`C` is the number of components, :math:`V` is the dynamic potential.
+
+        ``psi_arr_t`` is an array-like object with the shape ``(components, ensembles, *grid)``.
+        ``box`` is a tuple of length ``grid``, containing sizes of the simulation box.
+        ``tmax`` is the propagation time.
+        ``steps`` is the number of time steps to take.
+        ``samples`` is the number of samples to take (not counting the initial one);
+            should be a factor of ``steps``.
+        ``kinetic_coeff`` is the value of :math:`k`.
+        ``nonlinear_module`` calculates :math:`N`.
+        """
 
         self.tmax = tmax
         self.steps = steps

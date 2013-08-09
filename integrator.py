@@ -304,9 +304,6 @@ class Integrator:
 
         stepper = self.stepper_half if half_step else self.stepper
         dt = self.dt_half if half_step else self.dt
-        step = 0
-        sample = 0
-        t = 0
 
         if half_step:
             print("Sampling at t =", end=' ')
@@ -314,13 +311,14 @@ class Integrator:
             print("Skipping callbacks at t =", end=' ')
 
         if half_step:
-            res_dict, t_col = self._collect(psi, t, collectors)
+            res_dict, t_col = self._collect(psi, 0, collectors)
             results.append(res_dict)
             t_collectors += t_col
 
         for step in _range(self.steps * (2 if half_step else 1)):
+            t = step * dt
             stepper(psi, psi, t)
-            t += dt
+            t = (step + 1) * dt
 
             if (step + 1) % (self.steps / self.samples * (2 if half_step else 1)) == 0:
                 if half_step:

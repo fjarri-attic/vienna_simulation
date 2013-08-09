@@ -166,7 +166,7 @@ def plot_2d_universe(n, L, N):
 
     fig.colorbar(im,orientation='vertical', shrink=0.6, ticks=levels).set_label('$j$')
     fig.tight_layout()
-    fig.savefig('2d_universe.pdf')
+    fig.savefig('test_2d_universe.pdf')
 
 
 if __name__ == '__main__':
